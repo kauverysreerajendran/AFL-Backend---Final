@@ -27,14 +27,6 @@ from .serializers import MachineLogSerializer
 
 @api_view(['POST'])
 def log_machine_data(request):
-    """
-    View to handle machine data logging with updated Tx Log ID and Str Log ID conditions.
-    
-    - Tx_LOG_ID: Now only saves the data without any condition.
-    - STORED_LOG_ID:
-      - If > 1000, subtracts 1000 and stores only the adjusted value.
-      - Checks if the adjusted Log ID exists for the same Machine ID and Date before saving.
-    """
     data = request.data
     print("Processing machine log data...")
 
@@ -44,49 +36,47 @@ def log_machine_data(request):
     except (TypeError, ValueError):
         return Response({"message": "Invalid mode format"}, status=400)
 
-    #if mode not in MODES:
-        #return Response({"message": f"Invalid mode: {mode}. Valid modes are {list(MODES.keys())}"}, status=400)
-
     # Validate serializer
     serializer = MachineLogSerializer(data=data)
     if not serializer.is_valid():
-        return Response({"message": "Validation failed", "errors": serializer.errors}, status=400)
+        return Response({"message": "Validation failed", "errors": serializer.errors}, status=201)
 
     validated_data = serializer.validated_data
 
-    # Extract Log IDs, Machine ID, and Date
-    tx_log_id = validated_data.get("Tx_LOG_ID")
-    str_log_id = validated_data.get("STORED_LOG_ID")
     machine_id = validated_data.get("MACHINE_ID")
-    log_date = validated_data.get("DATE")  # Assumes DATE is provided and validated in serializer
+    operator_id = validated_data.get("OPERATOR_ID")
+    start_time = validated_data.get("START_TIME")
+    end_time = validated_data.get("END_TIME")
+    log_date = validated_data.get("DATE")
+    str_log_id = validated_data.get("STORED_LOG_ID")
 
-    if machine_id is None:
-        return Response({"message": "MACHINE_ID is required"}, status=400)
+    if not machine_id or not log_date:
+        return Response({"message": "MACHINE_ID and DATE are required"}, status=400)
 
-    if log_date is None:
-        return Response({"message": "DATE is required"}, status=400)
-
-    # STORED_LOG_ID Handling
+    # Adjust STORED_LOG_ID if needed
     if str_log_id is not None:
         try:
-            str_log_id = int(str_log_id)  # Convert to integer
+            str_log_id = int(str_log_id)
+            if str_log_id > 1000:
+                validated_data["STORED_LOG_ID"] = str_log_id - 1000
         except ValueError:
             return Response({"message": "Invalid STORED_LOG_ID format"}, status=400)
 
-        if str_log_id > 1000:
-            adjusted_str_log_id = str_log_id - 1000  # Subtract 1000
+    # ✅ Always check for duplicates BEFORE inserting (based on unique constraint)
+    if MachineLog.objects.filter(
+        MACHINE_ID=machine_id,
+        OPERATOR_ID=operator_id,
+        START_TIME=start_time,
+        END_TIME=end_time,
+        DATE=log_date, 
 
-            # Check if the adjusted STR Log ID exists for the same MACHINE_ID and DATE
-            if MachineLog.objects.filter(STORED_LOG_ID=adjusted_str_log_id, MACHINE_ID=machine_id, DATE=log_date).exists():
-                return Response({
-                    "code": 201,
-                    "message": "STR Log ID already exists for this machine and date, data not saved"
-                }, status=201)
+    ).exists():
+        return Response({
+            "code": 201,
+            "message": "Duplicate log entry exists for this machine, operator, and time. Data not saved."
+        }, status=201)
 
-            # Update validated data with adjusted STORED_LOG_ID
-            validated_data["STORED_LOG_ID"] = adjusted_str_log_id
-
-    # Save the log data
+    # Save log only if not duplicate
     MachineLog.objects.create(**validated_data)
 
     return Response({
